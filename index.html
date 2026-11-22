@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Pelikan Drive</title>
+<style>
+  :root { --bg: #10131a; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #e8ecf4;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+  h1 {
+    font-size: 18px; font-weight: 600; letter-spacing: 3px;
+    text-transform: uppercase; color: #9fb0d0; margin: 10px 0 6px;
+  }
+  #wrap { position: relative; }
+  canvas {
+    display: block;
+    border-radius: 10px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.55);
+    max-width: 96vw; max-height: 78vh;
+  }
+  #hud {
+    position: absolute; top: 10px; left: 12px; right: 12px;
+    display: flex; justify-content: space-between;
+    font-size: 14px; font-weight: 600;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+    pointer-events: none;
+  }
+  #hud .val { font-size: 18px; color: #fff; }
+  #hint {
+    margin-top: 8px; font-size: 12px; color: #6b7690;
+  }
+</style>
+</head>
+<body>
+<h1>Pelikan Drive</h1>
+<div id="wrap">
+  <canvas id="game" width="420" height="640"></canvas>
+  <div id="hud">
+    <div>Score <span class="val" id="score">0</span></div>
+    <div>Speed <span class="val" id="speed">0</span> km/h</div>
+    <div>Best <span class="val" id="best">0</span></div>
+  </div>
+</div>
+<div id="hint">← → steer &nbsp;·&nbsp; ↑ ↓ gas / brake &nbsp;·&nbsp; Space = restart &nbsp;·&nbsp; (touch: hold left/right side)</div>
+
+<script>
+"use strict";
+(() => {
+  const cvs = document.getElementById("game");
+  const ctx = cvs.getContext("2d");
+  const W = cvs.width, H = cvs.height;
+  const scoreEl = document.getElementById("score");
+  const speedEl = document.getElementById("speed");
+  const bestEl  = document.getElementById("best");
+
+  // ---------- Layout ----------
+  const ROAD_X = 40, ROAD_W = W - 80;         // asphalt area
+  const LANES = 4;
+  const LANE_W = ROAD_W / LANES;
+  const laneCenter = i => ROAD_X + LANE_W * (i + 0.5);
+
+  // ---------- State ----------
+  const MIN_SPD = 2.2, MAX_SPD = 11, START_SPD = 4;
+  let speed, player, enemies, parts, score, best, dist, running, crashed, tGlobal,
+      laneLines, spawnTimer, shake;
+
+  best = +(localStorage.getItem("pelikan.best") || 0);
+  bestEl.textContent = best;
+
+  function reset() {
+    speed = START_SPD;
+    score = 0; dist = 0; crashed = false; running = true; shake = 0;
+    enemies = []; parts = []; spawnTimer = 0.9; tGlobal = 0;
+    player = {
+      x: laneCenter(1), y: H - 110, w: 40, h: 74,
+      vx: 0, tilt: 0
+    };
+    laneLines = Array.from({length: LANES - 1}, (_, i) => ({
+      x: ROAD_X + LANE_W * (i + 1), off: 0
+    }));
+  }
+
+  // ---------- Input ----------
+  const keys = {};
+  addEventListener("keydown", e => {
+    keys[e.code] = true;
+    if (e.code === "Space" || e.code === "Enter") {
+      if (crashed) reset();
+    }
+    if (e.code.startsWith("Arrow")) e.preventDefault();
+  });
+  addEventListener("keyup", e => keys[e.code] = false);
+
+  let touchSide = 0; // -1 left, +1 right, 0 none
+  cvs.addEventListener("touchstart", e => {
+    e.preventDefault();
+    handleTouch(e.touches);
+  }, {passive: false});
+  cvs.addEventListener("touchmove", e => {
+    e.preventDefault();
+    handleTouch(e.touches);
+  }, {passive: false});
+  cvs.addEventListener("touchend", e => {
+    touchSide = 0;
+    if (crashed && e.changedTouches.length) reset();
+  });
+  cvs.addEventListener("mousedown", () => { if (crashed) reset(); });
+  function handleTouch(list) {
+    if (!list.length) { touchSide = 0; return; }
+    const r = cvs.getBoundingClientRect();
+    const x = list[0].clientX - r.left;
+    touchSide = x < r.width / 2 ? -1 : 1;
+  }
+
+  // ---------- Audio (tiny crash thump) ----------
+  let actx = null;
+  function crashSound() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = "square"; o.frequency.setValueAtTime(110, actx.currentTime);
+      o.frequency.exponentialRampToValueAtTime(35, actx.currentTime + .3);
+      g.gain.setValueAtTime(.25, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(.001, actx.currentTime + .35);
+      o.connect(g).connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + .4);
+    } catch (_) {}
+  }
+
+  // ---------- Helpers ----------
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const CAR_COLORS = ["#d94a5b", "#4a90d9", "#e6b94a", "#8a5fd9", "#4ac98a", "#d97a4a", "#7fd4e0"];
+
+  function spawnEnemy() {
+    // avoid stacking: pick a lane with no very recent car near the top
+    const open = [];
+    for (let i = 0; i < LANES; i++) {
+      const blocked = enemies.some(en => en.lane === i && en.y < 220);
+      if (!blocked) open.push(i);
+    }
+    if (!open.length) return;
+    const lane = open[Math.floor(Math.random() * open.length)];
+    const own = rand(MIN_SPD + .5, Math.max(4, speed * .75)); // slower than player → you overtake
+    enemies.push({
+      lane, x: laneCenter(lane), y: -90,
+      w: 40, h: 74, own,
+      color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+      wobble: rand(0, 6.28)
+    });
+  }
+
+  function drawCar(x, y, w, h, color, tilt, isPlayer) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(tilt || 0);
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    roundRect(-w/2 + 3, -h/2 + 4, w, h, 9); ctx.fill();
+    // body
+    ctx.fillStyle = color;
+    roundRect(-w/2, -h/2, w, h, 9); ctx.fill();
+    // roof / windshield
+    ctx.fillStyle = isPlayer ? "#bcd4ff" : "#222833";
+    roundRect(-w/2 + 6, -h/2 + 14, w - 12, 14, 4); ctx.fill();   // windshield
+    roundRect(-w/2 + 6,  h/2 - 26, w - 12, 12, 4); ctx.fill();   // rear glass
+    // wheels
+    ctx.fillStyle = "#141821";
+    const wy = h/2 - 12;
+    ctx.fillRect(-w/2 - 3, -wy, 6, 14); ctx.fillRect(w/2 - 3, -wy, 6, 14);
+    ctx.fillRect(-w/2 - 3,  wy - 14, 6, 14); ctx.fillRect(w/2 - 3, wy - 14, 6, 14);
+    // lights
+    ctx.fillStyle = isPlayer ? "#fff6c8" : "#ffb3a0";
+    ctx.fillRect(-w/2 + 5, -h/2 + 2, 7, 4); ctx.fillRect(w/2 - 12, -h/2 + 2, 7, 4);
+    ctx.restore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function explode(x, y) {
+    for (let i = 0; i < 26; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(1.5, 6);
+      parts.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 1,
+        life: rand(.4, .9), t: 0,
+        color: Math.random() < .5 ? "#ffb347" : "#ff5b5b",
+        size: rand(2, 5)
+      });
+    }
+  }
+
+  // ---------- Update ----------
+  function update(dt) {
+    tGlobal += dt;
+    if (!running) return;
+
+    // steering
+    let steer = 0;
+    if (keys["ArrowLeft"]  || keys["KeyA"]) steer -= 1;
+    if (keys["ArrowRight"] || keys["KeyD"]) steer += 1;
+    steer += touchSide;
+    steer = Math.max(-1, Math.min(1, steer));
+
+    player.vx += (steer * 260 - player.vx) * Math.min(1, dt * 9);
+    player.x += player.vx * dt;
+    player.tilt = player.vx / 260 * .28;
+
+    // keep on road
+    const half = player.w / 2;
+    if (player.x < ROAD_X + half + 4) { player.x = ROAD_X + half + 4; player.vx = 0; }
+    if (player.x > ROAD_X + ROAD_W - half - 4) { player.x = ROAD_X + ROAD_W - half - 4; player.vx = 0; }
+
+    // speed control
+    if (keys["ArrowUp"] || keys["KeyW"])     speed = Math.min(MAX_SPD, speed + 3 * dt);
+    if (keys["ArrowDown"] || keys["KeyS"])    speed = Math.max(MIN_SPD, speed - 4 * dt);
+    // gentle cruise drift back toward middle speed
+    speed += (4.5 - speed) * dt * .12;
+
+    // road scrolling
+    dist += speed * dt;
+    for (const L of laneLines) {
+      L.off = (L.off + speed * 12 * dt) % 48;
+    }
+
+    // spawning — faster when you drive fast
+    spawnTimer -= dt * (0.6 + speed / MAX_SPD);
+    if (spawnTimer <= 0) {
+      spawnEnemy();
+      spawnTimer = rand(.45, .85) * (MAX_SPD / (speed + 1.5)) + .3;
+      if (speed > 7 && Math.random() < .5) spawnEnemy();
+    }
+
+    // enemies move down relative to player
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const en = enemies[i];
+      en.y += (speed - en.own) * 12 * dt;
+      en.wobble += dt * 2;
+      if (en.y > H + 100) enemies.splice(i, 1);
+      // collision (AABB, forgiving)
+      if (Math.abs(en.x - player.x) < (en.w + player.w) / 2 - 8 &&
+          Math.abs(en.y - player.y) < (en.h + player.h) / 2 - 8) {
+        running = false; crashed = true; shake = .5;
+        explode(player.x, player.y);
+        crashSound();
+        if (score > best) {
+          best = score;
+          localStorage.setItem("pelikan.best", best);
+        }
+      }
+    }
+
+    // particles
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.t += dt; p.x += p.vx; p.y += p.vy + speed * 8 * dt; p.vx *= .98;
+      if (p.t > p.life) parts.splice(i, 1);
+    }
+    shake = Math.max(0, shake - dt);
+
+    score = Math.floor(dist * 3 + tGlobal * 0);
+    scoreEl.textContent = score;
+    speedEl.textContent = Math.round(speed * 18);
+    bestEl.textContent = best;
+  }
+
+  // ---------- Render ----------
+  function render() {
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-1,1) * shake * 14, rand(-1,1) * shake * 14);
+
+    // grass
+    ctx.fillStyle = "#2c4a2b";
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+    // grass texture stripes scrolling
+    ctx.fillStyle = "rgba(255,255,255,.05)";
+    const gOff = (dist * 60) % 90;
+    for (let y = -90 + gOff; y < H; y += 90) ctx.fillRect(-20, y, W + 40, 38);
+
+    // road
+    ctx.fillStyle = "#3a3f4b";
+    ctx.fillRect(ROAD_X, -20, ROAD_W, H + 40);
+    // road edges
+    ctx.fillStyle = "#d8dce6";
+    ctx.fillRect(ROAD_X - 6, -20, 5, H + 40);
+    ctx.fillRect(ROAD_X + ROAD_W + 1, -20, 5, H + 40);
+    // rumble red/white on outer edges
+    for (let y = -48 + gOff; y < H + 48; y += 48) {
+      ctx.fillStyle = "#c8452c";
+      ctx.fillRect(ROAD_X - 14, y, 8, 24);
+      ctx.fillStyle = "#e8ecf4";
+      ctx.fillRect(ROAD_X - 14, y + 24, 8, 24);
+      ctx.fillStyle = "#c8452c";
+      ctx.fillRect(ROAD_X + ROAD_W + 6, y + 24, 8, 24);
+      ctx.fillStyle = "#e8ecf4";
+      ctx.fillRect(ROAD_X + ROAD_W + 6, y, 8, 24);
+    }
+    // lane dashes
+    ctx.strokeStyle = "rgba(230,235,245,.85)";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([26, 22]);
+    for (const L of laneLines) {
+      ctx.lineDashOffset = -L.off;
+      ctx.beginPath();
+      ctx.moveTo(L.x, -20); ctx.lineTo(L.x, H + 20);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // enemies
+    for (const en of enemies) {
+      const bob = Math.sin(en.wobble) * 1.2;
+      drawCar(en.x, en.y + bob, en.w, en.h, en.color, 0, false);
+    }
+
+    // player (hidden after crash → debris shown instead)
+    if (!crashed) drawCar(player.x, player.y, player.w, player.h, "#2f6fe4", player.tilt, true);
+
+    // particles
+    for (const p of parts) {
+      ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // speed lines when fast
+    if (speed > 8 && !crashed) {
+      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 6; i++) {
+        const lx = rand(0, W), ly = rand(0, H), len = 20 + speed * 4;
+        ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx, ly + len); ctx.stroke();
+      }
+    }
+
+    // overlays
+    if (!running && crashed) {
+      ctx.fillStyle = "rgba(10,12,18,.62)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ff6b6b";
+      ctx.font = "bold 44px 'Segoe UI', sans-serif";
+      ctx.fillText("CRASHED!", W / 2, H / 2 - 40);
+      ctx.fillStyle = "#fff";
+      ctx.font = "22px 'Segoe UI', sans-serif";
+      ctx.fillText("Score " + score + "   ·   Best " + best, W / 2, H / 2 + 4);
+      ctx.fillStyle = "#9fb0d0";
+      ctx.font = "15px 'Segoe UI', sans-serif";
+      ctx.fillText("Press SPACE or tap to drive again", W / 2, H / 2 + 44);
+    } else if (dist < 40) {
+      ctx.fillStyle = "rgba(255,255,255,.85)";
+      ctx.textAlign = "center";
+      ctx.font = "18px 'Segoe UI', sans-serif";
+      ctx.fillText("← → to steer, ↑ gas, ↓ brake", W / 2, H / 2 - 20);
+    }
+    ctx.restore();
+  }
+
+  // ---------- Main loop ----------
+  let last = performance.now();
+  function frame(now) {
+    let dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
