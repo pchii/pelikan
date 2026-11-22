@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bicycle Rider Animation</title>
+<title>Pelikan Bicycle Animation</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -40,12 +40,16 @@
   /* rider body bob (legs are anchored at the hip, so only upper body bobs) */
   #upperBody { animation: bob .83s ease-in-out infinite; }
   @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+  /* pelican wing flap */
+  #wing { transform-origin: 392px 244px; animation: flap .83s ease-in-out infinite; }
+  @keyframes flap { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-10deg); } }
 </style>
 </head>
 <body>
 
 <div class="card">
-<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg" aria-label="Animated cyclist riding a bicycle">
+<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg" aria-label="Animated pelikan riding a bicycle">
 
   <!-- sky -->
   <defs>
@@ -122,8 +126,9 @@
   <!-- ====== bike ====== -->
   <!-- back leg (behind the frame) -->
   <g id="backLegG">
-    <polyline id="legB" points="" fill="none" stroke="#23262f" stroke-width="12"
+    <polyline id="legB" points="" fill="none" stroke="#d9823b" stroke-width="9"
               stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="footB" d="" fill="#d9823b"/>
   </g>
   <g id="pedalB"><rect x="-12" y="-4" width="24" height="8" rx="3" fill="#2a2d35"/></g>
   <line id="crankB" x1="360" y1="365" x2="360" y2="395" stroke="#3a3e48" stroke-width="6" stroke-linecap="round"/>
@@ -169,29 +174,38 @@
   <line x1="360" y1="374" x2="310" y2="378" stroke="#3a3e48" stroke-width="3"/>
 
   <!-- upper body (bobs slightly) -->
+  <!-- pelican body (bobs slightly) -->
   <g id="upperBody">
-    <!-- torso -->
-    <line x1="352" y1="268" x2="450" y2="235" stroke="#2f6fd0" stroke-width="20" stroke-linecap="round"/>
-    <!-- arm -->
-    <polyline points="450,238 494,252 532,268" fill="none" stroke="#2f6fd0" stroke-width="10"
-              stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="532" cy="268" r="6" fill="#f0b58f"/>
-    <!-- head + helmet -->
-    <circle cx="472" cy="222" r="15" fill="#f0b58f"/>
-    <path d="M456 218 A16 16 0 0 1 488 214 L486 224 A20 14 0 0 0 459 226 Z" fill="#ffd23e"/>
-    <rect x="452" y="216" width="10" height="5" rx="2.5" fill="#2a2d35" transform="rotate(-18 457 218)"/>
+    <!-- tail -->
+    <path d="M344 270 L318 282 L346 288 Z" fill="#d8d2c4"/>
+    <!-- body -->
+    <ellipse cx="390" cy="256" rx="50" ry="28" fill="#f7f4ea" stroke="#d8d2c4" stroke-width="2"
+             transform="rotate(-12 390 256)"/>
+    <!-- neck -->
+    <path d="M430 244 C446 234 450 226 458 216" fill="none" stroke="#f7f4ea" stroke-width="14" stroke-linecap="round"/>
+    <!-- head -->
+    <circle cx="466" cy="212" r="13" fill="#f7f4ea" stroke="#d8d2c4" stroke-width="1.5"/>
+    <!-- eye -->
+    <circle cx="470" cy="208" r="2.5" fill="#2a2d35"/>
+    <!-- beak: top + pouch -->
+    <path d="M472 206 L534 214 L472 219 Z" fill="#f39c4a"/>
+    <path d="M472 219 Q502 236 534 214 L472 222 Z" fill="#e07b39"/>
+    <!-- wing (flaps) -->
+    <path id="wing" d="M358 240 C378 224 412 224 424 240 C408 254 380 258 360 252 Z"
+          fill="#e8e2d2" stroke="#d8d2c4" stroke-width="1.5"/>
   </g>
 
   <!-- front crank + pedal + leg (in front of frame) -->
   <line id="crankF" x1="360" y1="365" x2="360" y2="395" stroke="#3a3e48" stroke-width="6" stroke-linecap="round"/>
   <g id="pedalF"><rect x="-12" y="-4" width="24" height="8" rx="3" fill="#2a2d35"/></g>
-  <polyline id="legF" points="" fill="none" stroke="#2f3340" stroke-width="12"
+  <polyline id="legF" points="" fill="none" stroke="#f39c4a" stroke-width="9"
             stroke-linecap="round" stroke-linejoin="round"/>
+  <path id="footF" d="" fill="#f39c4a"/>
 
 </svg>
 </div>
 
-<h1>🚴 Rider on a bicycle</h1>
+<h1>🚴 Pelikan on a bicycle</h1>
 
 <script>
 (function () {
@@ -224,6 +238,13 @@
     return `${H.x},${H.y} ${knee.x.toFixed(1)},${knee.y.toFixed(1)} ${f.x.toFixed(1)},${f.y.toFixed(1)}`;
   }
 
+  // pelican webbed foot following the pedal
+  function footPath(p) {
+    return `M${(p.x - 8).toFixed(1)} ${(p.y - 7).toFixed(1)} `
+         + `L${(p.x + 14).toFixed(1)} ${(p.y - 3).toFixed(1)} `
+         + `L${(p.x - 2).toFixed(1)} ${(p.y + 4).toFixed(1)} Z`;
+  }
+
   let t0 = null;
   function frame(now) {
     if (t0 === null) t0 = now;
@@ -243,6 +264,9 @@
 
     $('pedalF').setAttribute('transform', `translate(${pf.x.toFixed(1)} ${pf.y.toFixed(1)})`);
     $('pedalB').setAttribute('transform', `translate(${pb.x.toFixed(1)} ${pb.y.toFixed(1)})`);
+
+    $('footF').setAttribute('d', footPath(pf));
+    $('footB').setAttribute('d', footPath(pb));
 
     const deg = (t * wheelDegPerSec) % 360;
     $('spokesF').setAttribute('transform', `rotate(${deg} 550 370)`);
