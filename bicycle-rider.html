@@ -32,17 +32,17 @@
   }
 
   /* --- scenery scroll (seamless: elements duplicated at +900px) --- */
-  .clouds { animation: scroll450 45s linear infinite; }   /* ~20 px/s */
-  .hills  { animation: scroll450 30s linear infinite; }   /* ~30 px/s */
-  .trees  { animation: scroll450 12s linear infinite; }   /* ~75 px/s */
+  .clouds { animation: scroll450 34.3s linear infinite; } /* 26 px/s = road/16 */
+  .hills  { animation: scroll450 17.1s linear infinite; } /* 53 px/s = road/8 */
+  .trees  { animation: scroll450 8.6s linear infinite; }  /* 105 px/s = road/4 */
   @keyframes scroll450 { to { transform: translateX(-900px); } }
 
   /* rider body bob (legs are anchored at the hip, so only upper body bobs) */
-  #upperBody { animation: bob .83s ease-in-out infinite; }
+  #upperBody { animation: bob 1.61s ease-in-out infinite; }
   @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 
   /* pelican wing flap */
-  #wing { transform-origin: 392px 244px; animation: flap .83s ease-in-out infinite; }
+  #wing { transform-origin: 392px 244px; animation: flap 1.61s ease-in-out infinite; }
   @keyframes flap { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-10deg); } }
 </style>
 </head>
@@ -142,6 +142,7 @@
       <line x1="310" y1="322" x2="310" y2="418" transform="rotate(120 310 370)"/>
     </g>
     <circle cx="310" cy="370" r="7" fill="#454a55"/>
+    <circle cx="310" cy="370" r="9" fill="#565b66"/>
   </g>
   <g id="wheelF">
     <circle cx="550" cy="370" r="54" fill="none" stroke="#22262e" stroke-width="12"/>
@@ -170,8 +171,8 @@
   <rect x="332" y="248" width="40" height="11" rx="5" fill="#2a2d35"/>
   <!-- chainring + chain -->
   <circle cx="360" cy="365" r="10" fill="#3a3e48"/>
-  <line x1="360" y1="356" x2="310" y2="362" stroke="#3a3e48" stroke-width="3"/>
-  <line x1="360" y1="374" x2="310" y2="378" stroke="#3a3e48" stroke-width="3"/>
+  <line x1="360" y1="355" x2="310" y2="361" stroke="#3a3e48" stroke-width="3"/>
+  <line x1="360" y1="375" x2="310" y2="379" stroke="#3a3e48" stroke-width="3"/>
 
   <!-- upper body (bobs slightly) -->
   <!-- pelican body (bobs slightly) -->
@@ -214,10 +215,11 @@
   const CRANK = 30;                       // crank arm length
   const H = { x: 352, y: 268 };           // hip (fixed anchor)
   const L1 = 80, L2 = 80;                 // thigh / shin
-  const ROAD_SPEED = 300;                 // px/s — matches wheel + road scroll
+  const ROAD_SPEED = 420;                 // px/s — single source of truth for wheel, road, parallax
 
   const wheelDegPerSec = 360 * ROAD_SPEED / (2 * Math.PI * 54); // tire radius 54
-  const crankRevPerSec = 1.2;
+  const GEAR_RATIO = 2;                        // chainring r10 : cog r9 ≈ 2:1 → crank slower than wheel
+  const crankRevPerSec = ROAD_SPEED / (2 * Math.PI * 54) / GEAR_RATIO; // ≈ 37 rpm, realistic cadence
 
   function pedalPoint(angle) {
     return { x: B.x + CRANK * Math.cos(angle), y: B.y + CRANK * Math.sin(angle) };
